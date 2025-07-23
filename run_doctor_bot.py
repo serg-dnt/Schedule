@@ -37,12 +37,14 @@ def get_doctor_by_telegram_id(tg_id):
 
 @sync_to_async
 def get_free_slot_dates(doctor):
-    return list(
-        AvailableSlot.objects.filter(doctor=doctor, is_booked=False)
-        .order_by("start_datetime")
-        .values_list("start_datetime__date", flat=True)
-        .distinct()
-    )
+    # Получаем все слоты
+    slots = AvailableSlot.objects.filter(
+        doctor=doctor, is_booked=False
+    ).order_by("start_datetime")
+
+    # Извлекаем только уникальные даты
+    unique_dates = sorted({slot.start_datetime.date() for slot in slots})
+    return list(unique_dates)
 
 @sync_to_async
 def get_free_slots_by_date(doctor, date):
