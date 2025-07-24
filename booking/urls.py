@@ -1,11 +1,13 @@
 from django.urls import path
 from . import views
+from .views import CreateSlotsView, DoctorSlotsView, SlotFreeDatesView, AppointmentDatesView, SlotsListView
 
 urlpatterns = [
     # Услуги
     path('services/', views.ServiceListView.as_view(), name='service-list'),
 
     # Слоты
+    path('slots/', SlotsListView.as_view(), name='slot-list'),
     path(
         'slots/available/',
         views.AvailableSlotsView.as_view(),
@@ -13,14 +15,17 @@ urlpatterns = [
     ),
     path(
         'slots/create/',
-        views.CreateSlotsView.as_view(),
+        CreateSlotsView.as_view(),
         name='create-slots'
     ),
     path(
-        'slots/<int:pk>/delete/',
-        views.SlotDeleteView.as_view(),
-        name='delete-slot'
+        'slots/delete/',
+        views.DeleteSlotsView.as_view(),
+        name='delete-slots'
     ),
+    path("slots/all/", DoctorSlotsView.as_view(), name="doctor-all-slots"),
+    path("slots/free_dates/", SlotFreeDatesView.as_view(), name="slots-free-dates"),
+
 
     # Записи
     path(
@@ -43,11 +48,7 @@ urlpatterns = [
         views.DoctorAppointmentsView.as_view(),
         name='doctor-appointments'
     ),
+    path("appointments/dates/", AppointmentDatesView.as_view(), name="appointments-dates"),
 
     # Авторизация
-    path(
-        'auth/telegram/',
-        views.TelegramAuthView.as_view(),
-        name='telegram-auth'
-    )
 ]
