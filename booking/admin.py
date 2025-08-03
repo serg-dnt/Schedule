@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import User, AvailableSlot, Appointment
+from .models import User, AvailableSlot, Appointment, Service
+from .serializers import ServiceSerializer
 
 
 @admin.register(User)
@@ -30,3 +31,10 @@ class AppointmentAdmin(admin.ModelAdmin):
         'patient__phone_number', 'patient__telegram_id'
     )
     ordering = ('start_datetime',)
+
+
+@admin.register(Service)
+class ServiceAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'doctor', 'name', 'description', 'duration_minutes'
+    )

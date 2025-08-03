@@ -5,6 +5,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 import requests
 from dotenv import load_dotenv
 from datetime import datetime
+import logging
 
 from doctor_bot.keyboards.main import main_menu_keyboard, back_to_menu_button
 
@@ -59,7 +60,8 @@ async def handle_date_slots(callback: CallbackQuery):
         return
 
     # Форматируем вывод
-    text = f"🗓 Слоты на {date_str}:\n\n"
+    formatted_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
+    text = f"🗓 Слоты на {formatted_date}:\n\n"
     for slot in slots_on_date:
         start_time = slot["start_datetime"][11:16]
         end_time = slot["end_datetime"][11:16]

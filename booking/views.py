@@ -1,12 +1,14 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import generics,  status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework import generics, status
+from rest_framework.permissions import AllowAny
 from django.utils import timezone
 from django.contrib.auth import get_user_model
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, date
 from collections import defaultdict
 from booking.permissions import IsTelegramDoctor
+from rest_framework.generics import RetrieveAPIView
+import logging
 
 from .models import Service, AvailableSlot, Appointment
 from .serializers import (
@@ -14,9 +16,22 @@ from .serializers import (
     SlotSerializer,
     AppointmentSerializer,
     AppointmentCreateSerializer,
+    AppointmentCancelSerializer,
+    DoctorShortSerializer, TelegramAuthSerializer,
 )
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
+
+
+class DoctorListView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        doctors = User.objects.filter(is_doctor=True, is_doctor_approved=True)
+        serializer = DoctorShortSerializer(doctors, many=True)
+        logger.info(f"Возвращено {len(doctors)} докторов")
+        return Response(serializer.data)
 
 
 class ServiceListView(generics.ListAPIView):
@@ -26,9 +41,23 @@ class ServiceListView(generics.ListAPIView):
     permission_classes = [IsTelegramDoctor]
 
 
+class DoctorServicesView(APIView):
+    """Получение списка услуг конкретного доктора по его ID."""
+    permission_classes = [AllowAny] # ПОЗЖЕ ПОПРАВИТЬ
+
+    def get(self, request):
+        doctor_id = request.query_params.get('doctor_id')
+        if not doctor_id:
+            return Response({"error": "doctor_id is requiered"}, status=400)
+
+        services = Service.objects.filter(doctor_id=doctor_id)
+        serializer = ServiceSerializer(services, many=True)
+        return Response(serializer.data)
+
+
 class AvailableSlotsView(APIView):
     """Получение свободных слотов для услуги (учитывая длительность)"""
-    permission_classes = [IsTelegramDoctor]
+    permission_classes = [AllowAny]
 
     def get(self, request):
         service_id = request.query_params.get('service_id')
@@ -79,48 +108,42 @@ class AvailableSlotsView(APIView):
 
 
 class AppointmentCreateView(APIView):
-    """Создание записи на приём"""
-    permission_classes = [IsTelegramDoctor]
+    """Создание записи на приём через Telegram"""
+
+    permission_classes = [AllowAny]  # Позже можно заменить на custom-permission по Telegram ID
 
     def post(self, request):
         serializer = AppointmentCreateSerializer(
-            data=request.data, context={'request': request}
+            data=request.data
         )
         if serializer.is_valid():
-            appointment = serializer.save(patient=request.user)
+            appointment = serializer.save()
             return Response(AppointmentSerializer(appointment).data, status=201)
         return Response(serializer.errors, status=400)
 
 
-class CancelAppointmentView(APIView):
-    """Отмена своей записи"""
-    permission_classes = [IsTelegramDoctor]
+class AppointmentCancelView(APIView):
+    permission_classes = [AllowAny]  # позже можно ограничить доступ
 
-    def post(self, request, pk):
+    def post(self, request):
+        telegram_id = request.headers.get("X-Telegram-ID")
+        if not telegram_id:
+            return Response({"error": "Отсутствует Telegram ID"}, status=400)
+
         try:
-            appointment = Appointment.objects.get(id=pk)
-        except Appointment.DoesNotExist:
-            return Response({'error': 'Запись не найдена'}, status=404)
+            user = User.objects.get(telegram_id=telegram_id)
+        except User.DoesNotExist:
+            return Response({"error": "Пользователь не найден"}, status=404)
 
-        if request.user != appointment.patient and not request.user.is_doctor:
-            return Response({'error': 'Нет доступа'}, status=403)
-
-        # Освобождаем связанные слоты
-        appointment.slots.update(is_booked=False)
-        appointment.status = 'cancelled'
-        appointment.save()
-        return Response({'status': 'Запись отменена'})
-
-
-class MyAppointmentsView(generics.ListAPIView):
-    """Получение всех своих записей (пациент)"""
-    serializer_class = AppointmentSerializer
-    permission_classes = [IsTelegramDoctor]
-
-    def get_queryset(self):
-        return Appointment.objects.filter(
-            patient=self.request.user).order_by('start_datetime'
+        serializer = AppointmentCancelSerializer(
+            data=request.data,
+            context={"user": user}
         )
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"message": "Записи успешно отменены."}, status=200)
+
+        return Response(serializer.errors, status=400)
 
 
 class SlotsListView(APIView):
@@ -142,10 +165,16 @@ class SlotsListView(APIView):
         slots = AvailableSlot.objects.filter(
             doctor=request.user,
             start_datetime__date=date_obj,
-            is_booked=False
+            # is_booked=False
         ).order_by("start_datetime")
 
         return Response(SlotSerializer(slots, many=True).data)
+
+
+class SlotDetailAPIView(RetrieveAPIView):
+    queryset = AvailableSlot.objects.all()
+    serializer_class = SlotSerializer
+    permission_classes = [AllowAny]
 
 
 class CreateSlotsView(APIView):
@@ -198,8 +227,9 @@ class DoctorAppointmentsView(APIView):
             return Response({"error": "Доступ запрещён"}, status=403)
 
         appointments = Appointment.objects.filter(
-            doctor=request.user).order_by('start_datetime'
-        )
+            doctor=request.user,
+            status='active'
+        ).order_by('start_datetime')
         serializer = AppointmentSerializer(appointments, many=True)
         return Response(serializer.data)
 
@@ -223,19 +253,61 @@ class AppointmentDatesView(APIView):
 
 class SlotFreeDatesView(APIView):
     """Получение дат, на которые у врача есть свободные слоты"""
-    permission_classes = [IsTelegramDoctor]
-
+    permission_classes = [AllowAny]
     def get(self, request):
-        if not request.user.is_doctor:
-            return Response({"error": "Доступ запрещён"}, status=403)
+        doctor_id = request.query_params.get("doctor_id")
+        service_id = request.query_params.get("service_id")
 
-        dates = (
-            AvailableSlot.objects
-            .filter(doctor=request.user, is_booked=False)
-            .values_list('start_datetime__date', flat=True)
-            .distinct()
-        )
-        return Response(sorted(set(str(date) for date in dates)))
+        if not doctor_id:
+            return Response(
+                {"error": "doctor_id is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        slots = AvailableSlot.objects.filter(
+            doctor_id=doctor_id,
+            start_datetime__date__gte=date.today(),
+            # is_booked=False
+        ).order_by("start_datetime")
+
+        if not service_id:
+            # Просто вернуть уникальные даты, где есть хотя бы один слот
+            dates = sorted(
+                set(slot.start_datetime.date() for slot in slots))
+            return Response({"dates": [str(d) for d in dates]})
+
+        # Ниже — логика для пациента (фильтрация по длительности услуги)
+        try:
+            service = Service.objects.get(pk=service_id)
+            duration = service.duration
+        except Service.DoesNotExist:
+            return Response(
+                {"error": "Service not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Группировка по дате
+        grouped = {}
+        for slot in slots:
+            slot_date = slot.start_datetime.date()
+            grouped.setdefault(slot_date, []).append(slot)
+
+        valid_dates = []
+        needed = duration // 15
+        for slot_date, slot_list in grouped.items():
+            slot_list = sorted(slot_list, key=lambda s: s.start_datetime)
+            for i in range(len(slot_list) - needed + 1):
+                chunk = slot_list[i:i + needed]
+                ok = all(
+                    (chunk[j + 1].start_datetime - chunk[
+                        j].start_datetime).total_seconds() == 15 * 60
+                    for j in range(len(chunk) - 1)
+                )
+                if ok:
+                    valid_dates.append(str(slot_date))
+                    break
+
+        return Response({"dates": sorted(valid_dates)})
 
 
 class DoctorSlotsView(APIView):
@@ -247,36 +319,8 @@ class DoctorSlotsView(APIView):
             return Response({"error": "Доступ запрещён"}, status=403)
 
         slots = AvailableSlot.objects.filter(
-            doctor=request.user
-        ).order_by('start_datetime')
-        serializer = SlotSerializer(slots, many=True)
-        return Response(serializer.data)
-
-
-# class SlotDeleteView(APIView):
-#     """Удаление свободного слота врачом"""
-#     permission_classes = [IsAuthenticated]
-#
-#     def delete(self, request, pk):
-#         try:
-#             slot = AvailableSlot.objects.get(
-#                 id=pk, doctor=request.user, is_booked=False
-#             )
-#         except AvailableSlot.DoesNotExist:
-#             return Response(
-#                 {"error": "Слот не найден или уже занят"}, status=404
-#             )
-#
-#         slot.delete()
-#         return Response({"status": "Слот удалён"})
-
-
-class DoctorSlotsView(APIView):
-    permission_classes = [IsTelegramDoctor]
-
-    def get(self, request):
-        slots = AvailableSlot.objects.filter(
-            doctor=request.user
+            doctor=request.user,
+            is_booked=False
         ).order_by('start_datetime')
         serializer = SlotSerializer(slots, many=True)
         return Response(serializer.data)
@@ -296,3 +340,55 @@ class DeleteSlotsView(APIView):
         slots.delete()
 
         return Response({"deleted": deleted_count}, status=204)
+
+
+class PatientAppointmentsView(APIView):
+    """Список записей пациента по Telegram ID"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        telegram_id = request.data.get("telegram_id")
+        if not telegram_id:
+            return Response({"error": "Telegram ID обязателен"}, status=400)
+
+        try:
+            user = User.objects.get(telegram_id=telegram_id)
+        except User.DoesNotExist:
+            return Response({"error": "Пользователь не найден"}, status=404)
+
+        appointments = Appointment.objects.filter(patient=user, status="active").select_related("doctor", "service")
+        serializer = AppointmentSerializer(appointments, many=True)
+        return Response(serializer.data)
+
+
+class TelegrammAuthView(APIView):
+    def post(self, request):
+        serializer = TelegramAuthSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"status": "ok"},  status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CheckUserExistsView(APIView):
+    def get(self, request, telegram_id):
+        exists = User.objects.filter(telegram_id=telegram_id).exists()
+        return Response(
+            {"exists": exists},
+            status=status.HTTP_200_OK if exists else status.HTTP_404_NOT_FOUND
+        )
+
+
+
+class DoctorByTelegramIDAPIView(APIView):
+    def get(self, request):
+        telegram_id = request.headers.get("X-Telegram-ID")
+        if not telegram_id:
+            return Response({"detail": "Missing X-Telegram-ID header."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            doctor = User.objects.get(telegram_id=telegram_id, is_doctor=True)
+        except User.DoesNotExist:
+            return Response({"detail": "Doctor not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response(DoctorShortSerializer(doctor).data)

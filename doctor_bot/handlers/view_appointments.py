@@ -4,6 +4,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 import requests
+from datetime import datetime
 from dotenv import load_dotenv
 from doctor_bot.keyboards.main import back_to_menu_button, main_menu_keyboard
 
@@ -30,11 +31,11 @@ async def show_appointment_dates(callback: CallbackQuery, state: FSMContext):
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=date, callback_data=f"view_appts:{date}")]
+                [InlineKeyboardButton(text=datetime.strptime(date, "%Y-%m-%d").strftime("%d.%m.%Y"), callback_data=f"view_appts:{date}")]
                 for date in dates
             ] + [[InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]]
         )
-        await callback.message.answer("Выберите дату для просмотра записей:", reply_markup=keyboard)
+        await callback.message.edit_text("Выберите дату для просмотра записей:", reply_markup=keyboard)
         await state.set_state(ViewAppointmentsFSM.selecting_date)
 
 @router.callback_query(F.data.startswith("view_appts:"))
@@ -46,8 +47,10 @@ async def list_appointments(callback: CallbackQuery, state: FSMContext):
     if response.status_code == 200:
         appointments = response.json()
         if not appointments:
-            await callback.message.answer("На эту дату нет записей.")
+            await callback.message.edit_text("На эту дату нет записей.", reply_markup=back_to_menu_button())
             return
+
+        await state.update_data(date=date, appointments=appointments, cancel_list=[])
 
         text = ""
         buttons = []
@@ -65,16 +68,17 @@ async def list_appointments(callback: CallbackQuery, state: FSMContext):
                 [InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
             ]
         )
-        await callback.message.answer(text.strip(), reply_markup=keyboard)
+        await callback.message.edit_text(text.strip(), reply_markup=keyboard)
         await state.set_state(ViewAppointmentsFSM.selecting_to_cancel)
     else:
-        await callback.message.answer("Ошибка загрузки записей.")
+        await callback.message.edit_text("Ошибка загрузки записей.")
 
 @router.callback_query(F.data.startswith("cancel_appt:"))
 async def toggle_cancel_appointment(callback: CallbackQuery, state: FSMContext):
     appt_id = int(callback.data.split(":")[1])
     data = await state.get_data()
     selected = data.get("cancel_list", [])
+    appointments = data.get("appointments", [])
 
     if appt_id in selected:
         selected.remove(appt_id)
@@ -82,7 +86,26 @@ async def toggle_cancel_appointment(callback: CallbackQuery, state: FSMContext):
         selected.append(appt_id)
 
     await state.update_data(cancel_list=selected)
-    await callback.answer("Выбрано: " + ", ".join(map(str, selected)) or "Ничего не выбрано")
+
+    # 🔁 Обновляем сообщение с новой клавиатурой
+    text = ""
+    keyboard = []
+    for appt in appointments:
+        time = appt["start_datetime"][11:16]
+        name = appt["patient"]["full_name"]
+        phone = appt["patient"]["phone_number"]
+        service = appt["service"]["name"]
+        appt_id_current = appt["id"]
+
+        text += f"{time}\n{name}\n{phone}\n{service}\n\n"
+        label = f"{'✅ ' if appt_id_current in selected else ''}Отменить запись на {time}"
+        keyboard.append([InlineKeyboardButton(text=label, callback_data=f"cancel_appt:{appt_id_current}")])
+
+    keyboard.append([InlineKeyboardButton(text="✅ Подтвердить отмену", callback_data="confirm_cancellation")])
+    keyboard.append([InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")])
+
+    await callback.message.edit_text(text.strip(), reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+    await callback.answer()
 
 @router.callback_query(F.data == "confirm_cancellation")
 async def confirm_cancel_appointments(callback: CallbackQuery, state: FSMContext):
@@ -95,7 +118,7 @@ async def confirm_cancel_appointments(callback: CallbackQuery, state: FSMContext
     headers = {"X-Telegram-ID": str(callback.from_user.id)}
     response = requests.post(f"{BASE_API_URL}/appointments/cancel/", json={"appointment_ids": cancel_ids}, headers=headers)
     if response.status_code == 200:
-        await callback.message.answer("Выбранные записи отменены ✅", reply_markup=InlineKeyboardMarkup(
+        await callback.message.edit_text("Выбранные записи отменены ✅", reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]]
         ))
     else:

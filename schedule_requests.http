@@ -3,3 +3,21 @@ POST http://127.0.0.1:8000/api/token/
 Content-Type: application/json
 
 {"telegram_id": "648855023"}
+
+###
+GET http://127.0.0.1:8000/api/slots/free_dates/?doctor_id=4
+
+###
+GET http://127.0.0.1:8000/api/slots/127/
+Content-Type: application/json
+X-Telegram-ID: 648855023
+
+###
+GET http://127.0.0.1:8000/api/appointments/?date=2025-08-11
+Content-Type: application/json
+X-Telegram-ID: 648855023
+
+###
+POST http://127.0.0.1:8000/api/appointments/cancel/
+Content-Type: application/json
+X-Telegram-ID: 648855023

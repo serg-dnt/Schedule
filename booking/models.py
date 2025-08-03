@@ -22,6 +22,7 @@ class User(AbstractUser):
 
 
 class Service(models.Model):
+    doctor = models.ForeignKey(User, related_name='service', on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     duration_minutes = models.PositiveIntegerField(
