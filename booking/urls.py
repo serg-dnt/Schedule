@@ -60,6 +60,7 @@ urlpatterns = [
 
     # Авторизация
     path("users/register", TelegrammAuthView.as_view(), name="telegram-register"),
+    path("users/check/", views.CheckIsDoctorView.as_view(), name='telegram-doctor'),
     path("users/check/<int:telegram_id>/", CheckUserExistsView.as_view(), name="telegram-check"),
     path("doctors/by_telegram/", DoctorByTelegramIDAPIView.as_view(), name="doctors-by-telegram"),
 ]

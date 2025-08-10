@@ -12,6 +12,9 @@ from doctor_bot.handlers.view_appointments import router as appt_router
 from doctor_bot.keyboards.main import main_menu_keyboard
 from dotenv import load_dotenv
 import asyncio
+import requests
+
+from patient_bot.utils.api import API_BASE_URL
 
 load_dotenv()
 
@@ -27,7 +30,10 @@ dp.include_routers(create_router, view_router, delete_router, appt_router)
 
 @dp.message(F.text == "/start")
 async def on_start(message: Message):
-    await message.answer("Добро пожаловать!", reply_markup=main_menu_keyboard())
+    response = requests.get(f"{API_BASE_URL}/users/check")
+    if response.status_code == 200:
+        await message.answer("Добро пожаловать!", reply_markup=main_menu_keyboard())
+    await message.answer("Отказано в доступе.")
 
 @dp.callback_query(lambda c: c.data == "main_menu")
 async def back_to_menu(callback: CallbackQuery):

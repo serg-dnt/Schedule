@@ -244,7 +244,7 @@ class AppointmentDatesView(APIView):
 
         dates = (
             Appointment.objects
-            .filter(doctor=request.user)
+            .filter(doctor=request.user, status='active')
             .values_list('start_datetime__date', flat=True)
             .distinct()
         )
@@ -362,6 +362,7 @@ class PatientAppointmentsView(APIView):
 
 
 class TelegrammAuthView(APIView):
+
     def post(self, request):
         serializer = TelegramAuthSerializer(data=request.data)
         if serializer.is_valid():
@@ -376,6 +377,15 @@ class CheckUserExistsView(APIView):
         return Response(
             {"exists": exists},
             status=status.HTTP_200_OK if exists else status.HTTP_404_NOT_FOUND
+        )
+
+
+class CheckIsDoctorView(APIView):
+    def get(self, request, telegram_id):
+        is_doctor = User.objects.filter(telegram_id=telegram_id, is_doctor=True).exists()
+        return Response(
+            {"is_doctor": is_doctor},
+            status=status.HTTP_200_OK if is_doctor else status.HTTP_404_NOT_FOUND
         )
 
 
